@@ -167,6 +167,7 @@ func (sc *Controller) addPodInformer(svc *corev1.Service) error {
 		informers.WithTweakListOptions(func(listOpts *metav1.ListOptions) {
 			listOpts.LabelSelector = labels.Set(svc.Spec.Selector).String()
 		}),
+		informers.WithNamespace(svc.Namespace),
 	)
 	podInformer := podInformerFactory.Core().V1().Pods().Informer()
 
@@ -197,11 +198,6 @@ func (sc *Controller) addPodInformer(svc *corev1.Service) error {
 
 			if err := sc.handlePodUpdate(svcKey, oldPod, newPod); err != nil {
 				sc.Logger.WithError(err).Error("could not handle pod update")
-			}
-		},
-		DeleteFunc: func(oldObj interface{}) {
-			if err := sc.handlePodDeletion(svcKey); err != nil {
-				sc.Logger.WithError(err).Error("could not handle pod deletion")
 			}
 		},
 	})
