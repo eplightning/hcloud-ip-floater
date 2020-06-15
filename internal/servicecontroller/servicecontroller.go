@@ -199,6 +199,11 @@ func (sc *Controller) addPodInformer(svc *corev1.Service) error {
 				sc.Logger.WithError(err).Error("could not handle pod update")
 			}
 		},
+		DeleteFunc: func(oldObj interface{}) {
+			if err := sc.handlePodDeletion(svcKey); err != nil {
+				sc.Logger.WithError(err).Error("could not handle pod deletion")
+			}
+		},
 	})
 
 	stopper := make(chan struct{})
@@ -298,8 +303,26 @@ func (sc *Controller) handlePodUpdate(svcKey string, oldPod, newPod *corev1.Pod)
 	} else if newReady {
 		funcLogger.Info("pod became ready")
 	} else {
+		funcLogger.Info("some other uninteresting state transition")
 		return nil // some other uninteresting state transition
 	}
+
+	ips := getLoadbalancerIPs(svc)
+	return sc.handleServiceIPs(svc, ips)
+}
+
+func (sc *Controller) handlePodDeletion(svcKey string) error {
+	svc, err := sc.getServiceFromKey(svcKey)
+	if err != nil {
+		return err
+	}
+
+	funcLogger := sc.Logger.WithFields(logrus.Fields{
+		"namespace": svc.Namespace,
+		"service":   svc.Name,
+	})
+
+	funcLogger.Info("pod deleted")
 
 	ips := getLoadbalancerIPs(svc)
 	return sc.handleServiceIPs(svc, ips)
