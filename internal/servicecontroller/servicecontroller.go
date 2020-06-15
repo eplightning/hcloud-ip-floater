@@ -415,6 +415,11 @@ func (sc *Controller) getServiceReadyNodes(svcKey string) ([]string, error) {
 
 	nodes := make([]string, 0, len(pods))
 	for _, pod := range pods {
+		sc.Logger.WithFields(logrus.Fields{
+			"svcKey": svcKey,
+			"pod":    pod.Name,
+			"ready":  podIsReady(pod),
+		}).Info("considering pod")
 		if podIsReady(pod) {
 			nodes = append(nodes, pod.Spec.NodeName)
 		}
