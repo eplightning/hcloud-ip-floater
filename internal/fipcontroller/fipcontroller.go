@@ -88,6 +88,7 @@ func (fc *Controller) ForgetAttachments(svcIPs stringset.StringSet) {
 }
 
 func (fc *Controller) syncFloatingIPs() (bool, error) {
+	fc.logger.Info("syncFloatingIP")
 	fips, err := fc.hcloudClient.FloatingIP().AllWithOpts(context.Background(), hcloud.FloatingIPListOpts{
 		ListOpts: hcloud.ListOpts{
 			LabelSelector: config.Global.FloatingLabelSelector,
@@ -227,6 +228,11 @@ func (fc *Controller) getServiceIPs() stringset.StringSet {
 }
 
 func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error {
+	fc.logger.WithFields(logrus.Fields{
+		"fip":  fip.ID,
+		"node": node,
+	}).Error("before GetByName")
+
 	server, _, err := fc.hcloudClient.Server().GetByName(context.Background(), node)
 	if err != nil {
 		return err
@@ -237,10 +243,23 @@ func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error
 		return fmt.Errorf("could not find node %s", node)
 	}
 
+	fc.logger.WithFields(logrus.Fields{
+		"fip":    fip.ID,
+		"node":   node,
+		"server": server.ID,
+	}).Error("before Assign")
+
 	act, _, err := fc.hcloudClient.FloatingIP().Assign(context.Background(), fip, server)
 	if err != nil {
 		return err
 	}
+
+	fc.logger.WithFields(logrus.Fields{
+		"fip":    fip.ID,
+		"node":   node,
+		"server": server.ID,
+		"act":    act.ID,
+	}).Error("before WatchProgress")
 
 	_, errc := fc.hcloudClient.Action().WatchProgress(context.Background(), act)
 	return <-errc
