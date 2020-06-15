@@ -55,7 +55,6 @@ func (fc *Controller) Run() {
 // AttachToNode adds a FIP-to-node attachment to our worldview and immediately attempts to reconcile it with hcloud's
 func (fc *Controller) AttachToNode(svcIPs stringset.StringSet, node string) {
 	fc.attMu.Lock()
-	defer fc.attMu.Unlock()
 
 	var changedAttachment bool
 	for ip := range svcIPs {
@@ -64,6 +63,8 @@ func (fc *Controller) AttachToNode(svcIPs stringset.StringSet, node string) {
 			changedAttachment = true
 		}
 	}
+
+	fc.attMu.Unlock()
 
 	if changedAttachment {
 		_, err := fc.syncFloatingIPs()
@@ -98,8 +99,12 @@ func (fc *Controller) syncFloatingIPs() (bool, error) {
 		return false, err
 	}
 
+	fc.logger.Info("syncFloatingIPs attempting fipsMu lock")
+
 	fc.fipsMu.Lock()
 	defer fc.fipsMu.Unlock()
+
+	fc.logger.Info("syncFloatingIPs got fipsMu lock")
 
 	var changedFIPs bool
 
@@ -152,12 +157,16 @@ func (fc *Controller) Reconcile() {
 		toAttach := fc.getServiceIPs()
 
 		fc.fipsMu.RLock()
+		fc.logger.Info("Reconcile got fipsMu")
 		defer fc.fipsMu.RUnlock()
 
 		for ip, fip := range fc.fips {
 			fc.attMu.RLock()
+			fc.logger.Info("Reconcile got attMu")
 			node, found := fc.attachments[ip]
 			fc.attMu.RUnlock()
+			fc.logger.Info("Reconcile left attMu")
+
 			if !found {
 				// FIP not known to us; ignore
 				fc.logger.WithFields(logrus.Fields{
@@ -167,6 +176,10 @@ func (fc *Controller) Reconcile() {
 			}
 
 			if fip.Server == nil || fip.Server.Name != node {
+				fc.logger.WithFields(logrus.Fields{
+					"fip":  ip,
+					"node": node,
+				}).Info("attaching floating IP")
 				err := fc.attachFIPToNode(fip, node)
 				if err != nil {
 					fc.logger.WithError(err).WithFields(logrus.Fields{
@@ -216,8 +229,11 @@ func (fc *Controller) fipChanged(oldFIP *hcloud.FloatingIP, newFIP *hcloud.Float
 }
 
 func (fc *Controller) getServiceIPs() stringset.StringSet {
+	fc.logger.Info("getServiceIPs attempts attMu")
 	fc.attMu.RLock()
+	fc.logger.Info("getServiceIPs got attMu")
 	defer fc.attMu.RUnlock()
+	fc.logger.Info("getServiceIPs leaves attMu")
 
 	ips := make(stringset.StringSet)
 	for ip := range fc.attachments {
@@ -231,7 +247,7 @@ func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error
 	fc.logger.WithFields(logrus.Fields{
 		"fip":  fip.ID,
 		"node": node,
-	}).Error("before GetByName")
+	}).Info("before GetByName")
 
 	server, _, err := fc.hcloudClient.Server().GetByName(context.Background(), node)
 	if err != nil {
@@ -247,7 +263,7 @@ func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error
 		"fip":    fip.ID,
 		"node":   node,
 		"server": server.ID,
-	}).Error("before Assign")
+	}).Info("before Assign")
 
 	act, _, err := fc.hcloudClient.FloatingIP().Assign(context.Background(), fip, server)
 	if err != nil {
@@ -259,7 +275,7 @@ func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error
 		"node":   node,
 		"server": server.ID,
 		"act":    act.ID,
-	}).Error("before WatchProgress")
+	}).Info("before WatchProgress")
 
 	_, errc := fc.hcloudClient.Action().WatchProgress(context.Background(), act)
 	return <-errc
