@@ -64,6 +64,7 @@ func (fc *Controller) AttachToNode(svcIPs stringset.StringSet, node string) {
 		}
 	}
 
+	// this cannot be deferred since syncFloatingIPs does it's own locking
 	fc.attMu.Unlock()
 
 	if changedAttachment {
@@ -111,7 +112,7 @@ func (fc *Controller) syncFloatingIPs() (bool, error) {
 		seenFIPs.Add(ip)
 		oldFIP := fc.fips[ip]
 
-		if oldFIP == nil || fc.fipChanged(oldFIP, fip) {
+		if oldFIP == nil || !fipEquals(oldFIP, fip) {
 			// resolve Server reference (API returns only empty struct with ID)
 			// TODO: can we safely cache server info? Can we even support name changes?
 			if fip.Server != nil {
@@ -127,7 +128,7 @@ func (fc *Controller) syncFloatingIPs() (bool, error) {
 
 			fc.fips[ip] = fip
 			changedFIPs = true
-		} else if (oldFIP.Server != nil && oldFIP.Server.Name != fc.attachments[ip]) || (oldFIP.Server == nil && fc.attachments[ip] != "") {
+		} else if attachment, _ := fc.getAttachment(ip); fipServerName(oldFIP) != attachment {
 			// FIP hasn't changed but attachment doesn't match so let's reconcile
 			changedFIPs = true
 		}
@@ -155,9 +156,7 @@ func (fc *Controller) Reconcile() {
 		defer fc.fipsMu.RUnlock()
 
 		for ip, fip := range fc.fips {
-			fc.attMu.RLock()
-			node, found := fc.attachments[ip]
-			fc.attMu.RUnlock()
+			node, found := fc.getAttachment(ip)
 			if !found {
 				// FIP not known to us; ignore
 				fc.logger.WithFields(logrus.Fields{
@@ -166,7 +165,7 @@ func (fc *Controller) Reconcile() {
 				continue
 			}
 
-			if fip.Server == nil || fip.Server.Name != node {
+			if fipServerName(fip) != node {
 				err := fc.attachFIPToNode(fip, node)
 				if err != nil {
 					fc.logger.WithError(err).WithFields(logrus.Fields{
@@ -199,22 +198,6 @@ func (fc *Controller) Reconcile() {
 	})
 }
 
-func (fc *Controller) fipChanged(oldFIP *hcloud.FloatingIP, newFIP *hcloud.FloatingIP) bool {
-	if oldFIP.ID != newFIP.ID {
-		return true
-	}
-
-	if oldFIP.Server != newFIP.Server {
-		if oldFIP.Server != nil && newFIP.Server != nil && oldFIP.Server.ID == newFIP.Server.ID {
-			return false
-		}
-
-		return true
-	}
-
-	return false
-}
-
 func (fc *Controller) getServiceIPs() stringset.StringSet {
 	fc.attMu.RLock()
 	defer fc.attMu.RUnlock()
@@ -225,6 +208,14 @@ func (fc *Controller) getServiceIPs() stringset.StringSet {
 	}
 
 	return ips
+}
+
+func (fc *Controller) getAttachment(ip string) (string, bool) {
+	fc.attMu.RLock()
+	node, found := fc.attachments[ip]
+	fc.attMu.RUnlock()
+
+	return node, found
 }
 
 func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error {
@@ -245,4 +236,27 @@ func (fc *Controller) attachFIPToNode(fip *hcloud.FloatingIP, node string) error
 
 	_, errc := fc.hcloudClient.Action().WatchProgress(context.Background(), act)
 	return <-errc
+}
+
+func fipEquals(oldFIP *hcloud.FloatingIP, newFIP *hcloud.FloatingIP) bool {
+	if oldFIP.ID != newFIP.ID {
+		return false
+	}
+
+	if oldFIP.Server != newFIP.Server {
+		if oldFIP.Server != nil && newFIP.Server != nil && oldFIP.Server.ID == newFIP.Server.ID {
+			return true
+		}
+
+		return false
+	}
+
+	return true
+}
+
+func fipServerName(fip *hcloud.FloatingIP) string {
+	if fip.Server != nil {
+		return fip.Server.Name
+	}
+	return ""
 }
